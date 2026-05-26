@@ -343,7 +343,7 @@ def list_conversations(
     out.print(f"\n[bold]Antigravity Conversations[/bold]\n")
 
     endpoints = _discover_endpoints(port, token, log=out)
-    summaries, _ = get_all_trajectories_merged(endpoints)
+    summaries, _, _ = get_all_trajectories_merged(endpoints)
 
     if today:
         today_str = date.today().isoformat()
@@ -481,7 +481,7 @@ def info(
     console.print(f"\n[bold]Antigravity History[/bold] v{__version__}\n")
 
     endpoints = _discover_endpoints(port, token)
-    summaries, _ = get_all_trajectories_merged(endpoints)
+    summaries, _, _ = get_all_trajectories_merged(endpoints)
 
     console.print(f"  LanguageServer endpoints: {len(endpoints)}")
     console.print(f"  Total conversations: {len(summaries)}")
