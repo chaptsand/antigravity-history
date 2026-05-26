@@ -376,7 +376,7 @@ def list_conversations(
         table.add_column("Last Modified", width=20)
         table.add_column("Steps", justify="right", width=6)
         table.add_column("Title", max_width=50)
-        table.add_column("ID", style="dim", width=10)
+        table.add_column("ID", style="dim", width=12)
 
         for i, (cid, info) in enumerate(sorted_items):
             t = info.get("lastModifiedTime", "?")[:19]
