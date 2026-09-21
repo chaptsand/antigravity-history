@@ -14,7 +14,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 try:
     import typer
@@ -37,6 +37,12 @@ from antigravity_history.api import (
     get_trajectory_steps,
 )
 from antigravity_history.parser import parse_steps, FieldLevel
+from antigravity_history.cli_backend import (
+    has_cli_data,
+    get_cli_trajectories,
+    get_cli_conversation_messages,
+    get_cli_dir,
+)
 from antigravity_history.formatters import (
     format_markdown,
     format_json,
@@ -100,6 +106,52 @@ def _discover_endpoints(
     return endpoints
 
 
+def _detect_source(
+    mode: str = "auto",
+    port: Optional[int] = None,
+    token: Optional[str] = None,
+    log: Optional[Console] = None,
+) -> tuple[str, Any]:
+    """Detect data source. Returns ('ide', endpoints) or ('cli', None)."""
+    log = log or console
+    if mode == "cli":
+        if not has_cli_data():
+            err_console.print(
+                f"[bold red]No Antigravity CLI data found.[/bold red]\n"
+                f"[yellow]Directory {get_cli_dir()} does not exist or has no conversations.[/yellow]"
+            )
+            raise typer.Exit(1)
+        log.print(f"[dim]Using Antigravity CLI mode: {get_cli_dir()}[/dim]")
+        return "cli", None
+
+    if mode == "ide" or (port and token):
+        endpoints = _discover_endpoints(port, token, log)
+        return "ide", endpoints
+
+    # auto mode: first check if IDE LanguageServer is running
+    log.print("[dim]Discovering LanguageServer...[/dim]")
+    servers = discover_language_servers()
+    if servers:
+        endpoints = find_all_endpoints(servers)
+        if endpoints:
+            log.print(f"[dim]  Found {len(servers)} language_server instance(s)[/dim]")
+            log.print(f"[dim]  Connected to {len(endpoints)} endpoint(s)[/dim]")
+            return "ide", endpoints
+
+    # If IDE not found, fallback to CLI
+    if has_cli_data():
+        log.print("[dim]No Antigravity IDE LanguageServer found; detected Antigravity CLI (agy) data.[/dim]")
+        log.print(f"[dim]Using Antigravity CLI mode: {get_cli_dir()}[/dim]")
+        return "cli", None
+
+    # Neither found
+    err_console.print(
+        "[bold red]No Antigravity LanguageServer process or CLI conversation data found.[/bold red]\n"
+        "[yellow]Please make sure Antigravity is running with an open workspace, or Antigravity CLI has conversation history.[/yellow]"
+    )
+    raise typer.Exit(1)
+
+
 # ════════════════════════════════
 # export subcommand
 # ════════════════════════════════
@@ -120,6 +172,7 @@ def export(
     full: bool = typer.Option(False, "--full", help="Include all extended fields (thinking+diff+output)"),
     port: Optional[int] = typer.Option(None, "--port", help="Manually specify port"),
     token: Optional[str] = typer.Option(None, "--token", help="Manually specify CSRF token"),
+    mode: str = typer.Option("auto", "-m", "--mode", help="Data source mode: auto / ide / cli"),
 ):
     """Export conversations to Markdown / JSON format."""
     # Determine field level
@@ -133,35 +186,44 @@ def export(
     console.print(f"\n[bold]Antigravity History Export[/bold] v{__version__}")
     console.print(f"[dim]Field level: {level}[/dim]\n")
 
-    endpoints = _discover_endpoints(port, token)
+    source_type, endpoints = _detect_source(mode, port, token)
 
-    # Fetch conversation list from all LS instances (merge & deduplicate)
-    console.print("[dim]Fetching conversation list (scanning all workspaces)...[/dim]")
-    summaries, cascade_ep, failed_eps = get_all_trajectories_merged(endpoints)
-    indexed_count = len(summaries)
-    console.print(f"[dim]  Indexed conversations: {indexed_count}[/dim]")
-    if failed_eps:
-        console.print(f"[dim]  [yellow]LS endpoints failed: {len(failed_eps)}[/yellow][/dim]")
+    failed_eps = []
+    cascade_ep = {}
+    default_ep = None
 
-    default_ep = endpoints[0]
+    if source_type == "ide":
+        # Fetch conversation list from all LS instances (merge & deduplicate)
+        console.print("[dim]Fetching conversation list (scanning all workspaces)...[/dim]")
+        summaries, cascade_ep, failed_eps = get_all_trajectories_merged(endpoints)
+        indexed_count = len(summaries)
+        console.print(f"[dim]  Indexed conversations: {indexed_count}[/dim]")
+        if failed_eps:
+            console.print(f"[dim]  [yellow]LS endpoints failed: {len(failed_eps)}[/yellow][/dim]")
 
-    # Scan .pb files to find unindexed conversations
-    conv_dir = os.path.expanduser("~/.gemini/antigravity/conversations")
-    if os.path.isdir(conv_dir):
-        pb_files = [f for f in os.listdir(conv_dir) if f.endswith('.pb')]
-        unindexed_count = 0
-        for f in pb_files:
-            cid = f.replace('.pb', '')
-            if cid not in summaries:
-                summaries[cid] = {
-                    "summary": f"[unindexed] {cid[:8]}...",
-                    "stepCount": 1000,
-                }
-                cascade_ep[cid] = {"port": default_ep["port"], "csrf": default_ep["csrf"]}
-                unindexed_count += 1
-        if unindexed_count:
-            console.print(f"[dim]  Unindexed .pb files: {unindexed_count}[/dim]")
-        console.print(f"[dim]  Total to export: {len(summaries)}[/dim]")
+        default_ep = endpoints[0]
+
+        # Scan .pb files to find unindexed conversations
+        conv_dir = os.path.expanduser("~/.gemini/antigravity/conversations")
+        if os.path.isdir(conv_dir):
+            pb_files = [f for f in os.listdir(conv_dir) if f.endswith('.pb')]
+            unindexed_count = 0
+            for f in pb_files:
+                cid = f.replace('.pb', '')
+                if cid not in summaries:
+                    summaries[cid] = {
+                        "summary": f"[unindexed] {cid[:8]}...",
+                        "stepCount": 1000,
+                    }
+                    cascade_ep[cid] = {"port": default_ep["port"], "csrf": default_ep["csrf"]}
+                    unindexed_count += 1
+            if unindexed_count:
+                console.print(f"[dim]  Unindexed .pb files: {unindexed_count}[/dim]")
+            console.print(f"[dim]  Total to export: {len(summaries)}[/dim]")
+    else:
+        console.print("[dim]Fetching conversation list from Antigravity CLI...[/dim]")
+        summaries = get_cli_trajectories()
+        console.print(f"[dim]  Total CLI conversations: {len(summaries)}[/dim]")
 
     # Specified IDs (support on-demand loading and filtering)
     if ids:
@@ -172,11 +234,17 @@ def export(
                 for k in matched_keys:
                     filtered_summaries[k] = summaries[k]
             else:
-                filtered_summaries[cid] = {
-                    "summary": f"[on-demand] {cid[:8]}...",
-                    "stepCount": 1000,
-                }
-                cascade_ep[cid] = {"port": default_ep["port"], "csrf": default_ep["csrf"]}
+                if source_type == "ide":
+                    filtered_summaries[cid] = {
+                        "summary": f"[on-demand] {cid[:8]}...",
+                        "stepCount": 1000,
+                    }
+                    cascade_ep[cid] = {"port": default_ep["port"], "csrf": default_ep["csrf"]}
+                else:
+                    filtered_summaries[cid] = {
+                        "summary": f"[on-demand] {cid[:8]}...",
+                        "stepCount": 0,
+                    }
         summaries = filtered_summaries
 
     # Filter today's conversations
@@ -206,10 +274,13 @@ def export(
     # Concurrent fetch + parse (thread-safe pure functions)
     def _fetch_one(cascade_id, info):
         title = info.get("summary", "Untitled")
-        step_count = info.get("stepCount", 1000)
-        ep = cascade_ep.get(cascade_id, {"port": default_ep["port"], "csrf": default_ep["csrf"]})
-        steps = get_trajectory_steps(ep["port"], ep["csrf"], cascade_id, step_count)
-        messages = parse_steps(steps, level)
+        if source_type == "ide":
+            step_count = info.get("stepCount", 1000)
+            ep = cascade_ep.get(cascade_id, {"port": default_ep["port"], "csrf": default_ep["csrf"]})
+            steps = get_trajectory_steps(ep["port"], ep["csrf"], cascade_id, step_count)
+            messages = parse_steps(steps, level)
+        else:
+            messages = get_cli_conversation_messages(cascade_id, level)
         return cascade_id, title, info, messages
 
 
@@ -342,14 +413,18 @@ def list_conversations(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON (pipe-friendly)"),
     port: Optional[int] = typer.Option(None, "--port", help="Manually specify port"),
     token: Optional[str] = typer.Option(None, "--token", help="Manually specify CSRF token"),
+    mode: str = typer.Option("auto", "-m", "--mode", help="Data source mode: auto / ide / cli"),
 ):
     """List all conversations."""
     # In JSON mode, logs go to stderr to keep stdout clean
     out = err_console if json_output else console
     out.print(f"\n[bold]Antigravity Conversations[/bold]\n")
 
-    endpoints = _discover_endpoints(port, token, log=out)
-    summaries, _, _ = get_all_trajectories_merged(endpoints)
+    source_type, endpoints = _detect_source(mode, port, token, log=out)
+    if source_type == "ide":
+        summaries, _, _ = get_all_trajectories_merged(endpoints)
+    else:
+        summaries = get_cli_trajectories()
 
     if today:
         today_str = date.today().isoformat()
@@ -483,25 +558,35 @@ def info(
     port: Optional[int] = typer.Option(None, "--port", help="Manually specify port"),
     token: Optional[str] = typer.Option(None, "--token", help="Manually specify CSRF token"),
 ):
-    """Show LanguageServer status information."""
+    """Show Antigravity status information."""
     console.print(f"\n[bold]Antigravity History[/bold] v{__version__}\n")
+    console.print(f"  Platform: {platform.system()} ({platform.machine()})")
 
-    endpoints = _discover_endpoints(port, token)
-    summaries, _, _ = get_all_trajectories_merged(endpoints)
+    # Check Antigravity IDE (LanguageServer)
+    servers = discover_language_servers()
+    endpoints = find_all_endpoints(servers, port, token) if (servers or (port and token)) else []
+    if endpoints:
+        summaries, _, _ = get_all_trajectories_merged(endpoints)
+        console.print(f"  [green]Antigravity IDE (LanguageServer):[/green] Connected ({len(endpoints)} endpoint(s), {len(summaries)} conversation(s))")
+    else:
+        console.print("  [dim]Antigravity IDE (LanguageServer): No running process found[/dim]")
 
-    console.print(f"  LanguageServer endpoints: {len(endpoints)}")
-    console.print(f"  Total conversations: {len(summaries)}")
-
-    if summaries:
-        sorted_items = sorted(
-            summaries.items(),
-            key=lambda x: x[1].get("lastModifiedTime", ""),
-        )
-        oldest = sorted_items[0][1].get("createdTime", "?")[:10]
-        newest = sorted_items[-1][1].get("lastModifiedTime", "?")[:10]
-        total_steps = sum(v.get("stepCount", 0) for v in summaries.values())
-        console.print(f"  Total steps: {total_steps}")
-        console.print(f"  Time range: {oldest} ~ {newest}")
+    # Check Antigravity CLI
+    if has_cli_data():
+        cli_summaries = get_cli_trajectories()
+        console.print(f"  [green]Antigravity CLI (agy):[/green] Found ({len(cli_summaries)} conversation(s) at {get_cli_dir()})")
+        if cli_summaries:
+            sorted_items = sorted(
+                cli_summaries.items(),
+                key=lambda x: x[1].get("lastModifiedTime", ""),
+            )
+            total_steps = sum(v.get("stepCount", 0) for v in cli_summaries.values())
+            oldest = sorted_items[0][1].get("createdTime", "?")[:10]
+            newest = sorted_items[-1][1].get("lastModifiedTime", "?")[:10]
+            console.print(f"    Total steps: {total_steps}")
+            console.print(f"    Time range:  {oldest} ~ {newest}")
+    else:
+        console.print(f"  [dim]Antigravity CLI: No data found at {get_cli_dir()}[/dim]")
 
 
 # ════════════════════════════════
