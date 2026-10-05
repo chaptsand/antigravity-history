@@ -173,6 +173,10 @@ def export(
     port: Optional[int] = typer.Option(None, "--port", help="Manually specify port"),
     token: Optional[str] = typer.Option(None, "--token", help="Manually specify CSRF token"),
     mode: str = typer.Option("auto", "-m", "--mode", help="Data source mode: auto / ide / cli"),
+    no_tools: bool = typer.Option(
+        False, "--no-tools", "--chat-only",
+        help="Exclude tool calls and executions (export pure conversation)",
+    ),
 ):
     """Export conversations to Markdown / JSON format."""
     # Determine field level
@@ -183,8 +187,9 @@ def export(
     else:
         level = FieldLevel.DEFAULT
 
+    level_str = f"{level} (no-tools)" if no_tools else level
     console.print(f"\n[bold]Antigravity History Export[/bold] v{__version__}")
-    console.print(f"[dim]Field level: {level}[/dim]\n")
+    console.print(f"[dim]Field level: {level_str}[/dim]\n")
 
     source_type, endpoints = _detect_source(mode, port, token)
 
@@ -278,9 +283,9 @@ def export(
             step_count = info.get("stepCount", 1000)
             ep = cascade_ep.get(cascade_id, {"port": default_ep["port"], "csrf": default_ep["csrf"]})
             steps = get_trajectory_steps(ep["port"], ep["csrf"], cascade_id, step_count)
-            messages = parse_steps(steps, level)
+            messages = parse_steps(steps, level, no_tools=no_tools)
         else:
-            messages = get_cli_conversation_messages(cascade_id, level)
+            messages = get_cli_conversation_messages(cascade_id, level, no_tools=no_tools)
         return cascade_id, title, info, messages
 
 

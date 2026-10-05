@@ -22,12 +22,14 @@ class FieldLevel:
 def parse_steps(
     steps: list[dict],
     level: str = FieldLevel.DEFAULT,
+    no_tools: bool = False,
 ) -> list[dict]:
     """Parse raw steps into a list of structured messages.
 
     Args:
         steps: Raw steps returned by the API
         level: Field level (default / thinking / full)
+        no_tools: Whether to exclude tool calls and executions
 
     Returns:
         [{"role": "user"|"assistant"|"tool", "content": str, ...}, ...]
@@ -43,6 +45,9 @@ def parse_steps(
 
         msg = _parse_step(step, step_type, include_thinking, include_full)
         if msg is None:
+            continue
+
+        if no_tools and msg.get("role") == "tool":
             continue
 
         if timestamp:

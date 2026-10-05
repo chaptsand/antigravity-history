@@ -124,6 +124,7 @@ def get_cli_conversation_messages(
     cid: str,
     level: str = "default",
     cli_dir: Optional[Path] = None,
+    no_tools: bool = False,
 ) -> list[dict]:
     """Parse messages from a CLI conversation transcript log.
 
@@ -131,6 +132,7 @@ def get_cli_conversation_messages(
         cid: Conversation UUID
         level: "default" / "thinking" / "full"
         cli_dir: Optional base directory
+        no_tools: Whether to exclude tool calls and executions
 
     Returns:
         List of message dicts matching parser.parse_steps output format.
@@ -166,6 +168,29 @@ def get_cli_conversation_messages(
                 content = step.get("content") or ""
                 thinking = step.get("thinking") or ""
                 tool_calls = step.get("tool_calls") or []
+
+                if no_tools:
+                    if stype == "GENERIC":
+                        continue
+                    if stype == "USER_INPUT":
+                        m = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", content, re.DOTALL)
+                        clean_content = m.group(1).strip() if m else content.strip()
+                        msg = {"role": "user", "content": clean_content}
+                        if include_thinking and created_at:
+                            msg["timestamp"] = created_at
+                        messages.append(msg)
+                    elif stype == "PLANNER_RESPONSE":
+                        if content and content.strip():
+                            msg = {
+                                "role": "assistant",
+                                "content": content.strip(),
+                            }
+                            if include_thinking and thinking.strip():
+                                msg["thinking"] = thinking.strip()
+                            if created_at:
+                                msg["timestamp"] = created_at
+                            messages.append(msg)
+                    continue
 
                 # Tool output handling (GENERIC step following a tool call)
                 if pending_tool and stype == "GENERIC":

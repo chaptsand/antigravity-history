@@ -55,6 +55,7 @@ aghistory export          # ← start here!
 
 ```bash
 aghistory export                     # Basic: user messages + AI responses + tool summaries
+aghistory export --no-tools          # Pure chat: user messages + AI responses (no tool calls)
 aghistory export --thinking          # ↑ + AI thinking chains, timestamps, exit codes, cwd
 aghistory export --full              # ↑ + full code diffs, command outputs, search results, model name
 ```

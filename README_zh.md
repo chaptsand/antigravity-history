@@ -55,6 +55,7 @@ aghistory export          # ← 从这里开始！
 
 ```bash
 aghistory export                     # 基础：用户消息 + AI 回复 + 工具摘要
+aghistory export --no-tools          # 纯对话：用户消息 + AI 回复（过滤所有工具调用）
 aghistory export --thinking          # ↑ + 思维链、时间戳、退出码、工作目录
 aghistory export --full              # ↑ + diff 全文、命令输出、搜索结果、模型名
 ```
